@@ -403,6 +403,23 @@ uint GetNumInternalNodes(uint numLeaves)
 }
 
 inline
+uint GetOffsetFromSortedIndicesToAABBParents(uint numPrimitives) {
+    return 4 /* sizeof(UINT) */ * numPrimitives;
+}
+
+inline
+uint GetOffsetToBVHSortedIndices(uint numElements) {
+    uint totalNodes = numElements + GetNumInternalNodes(numElements);
+    return SizeOfBVHOffsets + SizeOfAABBNode * totalNodes + SizeOfBVHMetadata * numElements;
+}
+
+inline
+uint GetOffsetFromPrimitiveMetaDataToSortedIndices(uint numPrimitives)
+{
+    return SizeOfPrimitiveMetaData * numPrimitives;
+}
+
+inline
 uint GetOffsetFromPrimitivesToPrimitiveMetaData(uint numPrimitives)
 {
     return SizeOfPrimitive * numPrimitives;

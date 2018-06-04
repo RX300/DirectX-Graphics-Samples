@@ -65,15 +65,57 @@ namespace FallbackLayer
 
         switch (pDesc->Type)
         {
-        case D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL:
-            BuildBottomLevelBVH(pCommandList, pDesc);
+            case D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL:
+                BuildBottomLevelBVH(pCommandList, pDesc);
             break;
+            case D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL:
+                BuildTopLevelBVH(pCommandList, pDesc, pCbvSrvUavDescriptorHeap);
+            break;
+            default:
+                ThrowFailure(E_INVALIDARG, L"Unrecognized D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE provided");
+        }
+    }
 
-        case D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL:
-            BuildTopLevelBVH(pCommandList, pDesc, pCbvSrvUavDescriptorHeap);
+    void GpuBvh2Builder::LoadBVHGPUStreet(
+        _In_  const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *pDesc,
+        Level bvhLevel,
+        UINT numElements,
+        BVHGPUStreet &street)
+    {
+        D3D12_GPU_VIRTUAL_ADDRESS bvhGpuVA = pDesc->DestAccelerationStructureData.StartAddress;
+        ScratchMemoryPartitions scratchMemoryPartition = CalculateScratchMemoryUsage(bvhLevel, numElements);
+        D3D12_GPU_VIRTUAL_ADDRESS scratchGpuVA = pDesc->ScratchAccelerationStructureData.StartAddress;
+        
+        street.scratchElementBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToElements;
+        street.mortonCodeBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToMortonCodes;
+        street.sceneAABB = scratchGpuVA + scratchMemoryPartition.OffsetToSceneAABB;
+        street.sceneAABBScratchMemory = scratchGpuVA + scratchMemoryPartition.OffsetToSceneAABBScratchMemory;
+        street.indexBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToIndexBuffer;
+        street.hierarchyBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToHierarchy;
+        street.calculateAABBScratchBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToCalculateAABBDispatchArgs;
+        street.nodeCountBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToPerNodeCounter;
+
+        switch(bvhLevel) 
+        {
+            case Level::Top:
+            {
+                UINT offsetFromElementsToMetadata = GetOffsetFromLeafNodesToBottomLevelMetadata(numElements);
+                street.scratchMetadataBuffer = street.scratchElementBuffer + offsetFromElementsToMetadata;
+                street.outputElementBuffer = bvhGpuVA + GetOffsetToLeafNodeAABBs(numElements);
+                street.outputMetadataBuffer = street.outputElementBuffer + offsetFromElementsToMetadata;
+                street.outputSortCacheBuffer = bvhGpuVA + GetOffsetToBVHSortedIndices(numElements);
+                street.outputAABBParentBuffer = street.outputSortCacheBuffer + GetOffsetFromSortedIndicesToAABBParents(numElements);
+            }
             break;
-        default:
-            ThrowFailure(E_INVALIDARG, L"Unrecognized D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE provided");
+            case Level::Bottom:
+            {
+                street.scratchMetadataBuffer = street.scratchElementBuffer + GetOffsetFromPrimitivesToPrimitiveMetaData(numElements);
+                street.outputElementBuffer = bvhGpuVA + GetOffsetToPrimitives(numElements);
+                street.outputMetadataBuffer = street.outputElementBuffer + GetOffsetFromPrimitivesToPrimitiveMetaData(numElements);
+                street.outputSortCacheBuffer = street.outputMetadataBuffer + GetOffsetFromPrimitiveMetaDataToSortedIndices(numElements);
+                street.outputAABBParentBuffer = street.outputSortCacheBuffer + GetOffsetFromSortedIndicesToAABBParents(numElements);
+            }
+            break;
         }
     }
 
@@ -82,136 +124,223 @@ namespace FallbackLayer
         _In_  const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *pDesc,
         _In_ ID3D12DescriptorHeap *pCbvSrvUavDescriptorHeap)
     {
-        CComPtr<ID3D12Device> pDevice;
-        pCommandList->GetDevice(IID_PPV_ARGS(&pDevice));
-
-        ScratchMemoryPartitions scratchMemoryPartition = CalculateScratchMemoryUsage(Level::Top, pDesc->NumDescs);
-        D3D12_GPU_VIRTUAL_ADDRESS scratchGpuVA = pDesc->ScratchAccelerationStructureData.StartAddress;
-        D3D12_GPU_VIRTUAL_ADDRESS scratchBVHBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToElements;
-        D3D12_GPU_VIRTUAL_ADDRESS mortonCodeBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToMortonCodes;
-        D3D12_GPU_VIRTUAL_ADDRESS sceneAABB = scratchGpuVA + scratchMemoryPartition.OffsetToSceneAABB;
-        D3D12_GPU_VIRTUAL_ADDRESS sceneAABBScratchMemory = scratchGpuVA + scratchMemoryPartition.OffsetToSceneAABBScratchMemory;
-        D3D12_GPU_VIRTUAL_ADDRESS indexBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToIndexBuffer;
-        D3D12_GPU_VIRTUAL_ADDRESS calculateAABBScratchBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToCalculateAABBDispatchArgs;
-        D3D12_GPU_VIRTUAL_ADDRESS nodeCountBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToPerNodeCounter;
-        D3D12_GPU_VIRTUAL_ADDRESS hierarchyBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToHierarchy;
-
-        const UINT64 totalSize = sizeof(D3D12_GPU_VIRTUAL_ADDRESS) * pDesc->NumDescs;
-        D3D12_HEAP_PROPERTIES heapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-        D3D12_RESOURCE_DESC resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(totalSize);
-
-        UINT numElements = pDesc->NumDescs;
         const SceneType sceneType = SceneType::BottomLevelBVHs;
-        m_loadInstancesPass.LoadInstances(pCommandList, scratchBVHBuffer, pDesc->InstanceDescs, pDesc->DescsLayout, pDesc->NumDescs, pCbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
-        m_sceneAABBCalculator.CalculateSceneAABB(pCommandList, sceneType, scratchBVHBuffer, numElements, sceneAABBScratchMemory, sceneAABB);
-        m_mortonCodeCalculator.CalculateMortonCodes(pCommandList, sceneType, scratchBVHBuffer, numElements, sceneAABB, indexBuffer, mortonCodeBuffer);
-        m_sorterPass.Sort(pCommandList, mortonCodeBuffer, indexBuffer, numElements, false, true);
+        UINT numElements = pDesc->NumDescs;
+        D3D12_GPU_DESCRIPTOR_HANDLE globalDescriptorHeap = pCbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
 
-        UINT offsetFromBufferToMetadata = GetOffsetFromLeafNodesToBottomLevelMetadata(numElements);
-        auto outputBVHLocation = pDesc->DestAccelerationStructureData.StartAddress + GetOffsetToLeafNodeAABBs(numElements);
-        m_rearrangePass.Rearrange(
+        BuildBVH(
             pCommandList,
+            pDesc,
+            Level::Top,
             sceneType,
-            scratchBVHBuffer,
             numElements,
-            indexBuffer,
-            outputBVHLocation,
-            scratchBVHBuffer + offsetFromBufferToMetadata,
-            outputBVHLocation + offsetFromBufferToMetadata);
-
-        m_constructHierarchyPass.ConstructHierarchy(
-            pCommandList,
-            sceneType,
-            mortonCodeBuffer,
-            hierarchyBuffer,
-            pCbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart(),
-            numElements);
-
-        m_constructAABBPass.ConstructAABB(
-            pCommandList,
-            sceneType,
-            pDesc->DestAccelerationStructureData.StartAddress,
-            calculateAABBScratchBuffer,
-            nodeCountBuffer,
-            mortonCodeBuffer,
-            hierarchyBuffer,
-            pCbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart(),
-            numElements);
+            globalDescriptorHeap
+        );
     }
 
     void GpuBvh2Builder::BuildBottomLevelBVH(
         _In_  ID3D12GraphicsCommandList *pCommandList,
         _In_  const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *pDesc)
     {
+        const SceneType sceneType = SceneType::Triangles;
+        UINT numElements = GetTotalPrimitiveCount(*pDesc);
+        D3D12_GPU_DESCRIPTOR_HANDLE globalDescriptorHeap = D3D12_GPU_DESCRIPTOR_HANDLE();
+
+        BuildBVH(
+            pCommandList,
+            pDesc,
+            Level::Bottom,
+            sceneType,
+            numElements,
+            globalDescriptorHeap
+        );
+    }
+
+    void GpuBvh2Builder::BuildBVH(
+        _In_  ID3D12GraphicsCommandList *pCommandList,
+        _In_  const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *pDesc,
+        Level bvhLevel,
+        SceneType sceneType,
+        UINT numElements,
+        D3D12_GPU_DESCRIPTOR_HANDLE globalDescriptorHeap)
+    {
         if (pDesc->DestAccelerationStructureData.StartAddress == 0)
         {
             ThrowFailure(E_INVALIDARG, L"DestAccelerationStructureData.StartAddress must be non-zero");
         }
 
-        // Load all the triangles into the bottom-level acceleration structure. This loading is done 
-        // one VB/IB pair at a time since each VB will have unique characteristics (topology type/IB format)
-        // and will generally have enough verticies to go completely wide
-        UINT totalTriangles = GetTotalPrimitiveCount(*pDesc);
-        ScratchMemoryPartitions scratchMemoryPartition = CalculateScratchMemoryUsage(Level::Bottom, totalTriangles);
-        D3D12_GPU_VIRTUAL_ADDRESS scratchGpuVA = pDesc->ScratchAccelerationStructureData.StartAddress;
-        D3D12_GPU_VIRTUAL_ADDRESS scratchTriangleBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToElements;
-        D3D12_GPU_VIRTUAL_ADDRESS scratchMetadataBuffer = scratchTriangleBuffer + GetOffsetFromPrimitivesToPrimitiveMetaData(totalTriangles);
-        D3D12_GPU_VIRTUAL_ADDRESS mortonCodeBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToMortonCodes;
-        D3D12_GPU_VIRTUAL_ADDRESS sceneAABB = scratchGpuVA + scratchMemoryPartition.OffsetToSceneAABB;
-        D3D12_GPU_VIRTUAL_ADDRESS sceneAABBScratchMemory = scratchGpuVA + scratchMemoryPartition.OffsetToSceneAABBScratchMemory;
-        D3D12_GPU_VIRTUAL_ADDRESS indexBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToIndexBuffer;
-        D3D12_GPU_VIRTUAL_ADDRESS hierarchyBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToHierarchy;
+        BVHGPUStreet street = {}; LoadBVHGPUStreet(pDesc, bvhLevel, numElements, street);
 
-        D3D12_GPU_VIRTUAL_ADDRESS calculateAABBScratchBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToCalculateAABBDispatchArgs;
-        D3D12_GPU_VIRTUAL_ADDRESS nodeCountBuffer = scratchGpuVA + scratchMemoryPartition.OffsetToPerNodeCounter;
+        const bool performUpdate = m_updateAllowed && (pDesc->Flags & D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE);
 
-        const SceneType sceneType = SceneType::Triangles;
-        m_loadPrimitivesPass.LoadPrimitives(pCommandList, *pDesc, totalTriangles, scratchTriangleBuffer, scratchMetadataBuffer);
-        m_sceneAABBCalculator.CalculateSceneAABB(pCommandList, sceneType, scratchTriangleBuffer, totalTriangles, sceneAABBScratchMemory, sceneAABB);
-        m_mortonCodeCalculator.CalculateMortonCodes(pCommandList, sceneType, scratchTriangleBuffer, totalTriangles, sceneAABB, indexBuffer, mortonCodeBuffer);
-        m_sorterPass.Sort(pCommandList, mortonCodeBuffer, indexBuffer, totalTriangles, false, true);
+        // Load in the leaf-node elements of the BVH and calculate the entire scene's AABB.
+        LoadBVHElements(
+            pCommandList,
+            pDesc,
+            sceneType,
+            numElements,
+            performUpdate ? street.outputElementBuffer   : street.scratchElementBuffer, // If we're updating, write straight to output.
+            performUpdate ? street.outputMetadataBuffer  : street.scratchMetadataBuffer, 
+            performUpdate ? street.outputSortCacheBuffer : 0,
+            street.sceneAABBScratchMemory,
+            street.sceneAABB,
+            globalDescriptorHeap);
 
-        D3D12_GPU_VIRTUAL_ADDRESS outputTriangleBuffer = pDesc->DestAccelerationStructureData.StartAddress + GetOffsetToPrimitives(totalTriangles);
-        D3D12_GPU_VIRTUAL_ADDRESS outputMetadataBuffer = outputTriangleBuffer + GetOffsetFromPrimitivesToPrimitiveMetaData(totalTriangles);
+        // If we don't have PERFORM_UPDATE set, rebuild the entire hierarchy.
+        // (i.e. calc morton codes, sort, rearrange, build hierarchy, treelet reorder)
+        if (!performUpdate) {
+            BuildBVHHierarchy(
+                pCommandList,
+                pDesc,
+                sceneType,
+                numElements,
+                street.scratchElementBuffer,
+                street.outputElementBuffer,
+                street.scratchMetadataBuffer,
+                street.outputMetadataBuffer,
+                street.sceneAABBScratchMemory,
+                street.sceneAABB,
+                street.mortonCodeBuffer,
+                street.indexBuffer,
+                m_updateAllowed ? street.outputSortCacheBuffer : 0,
+                street.hierarchyBuffer,
+                m_updateAllowed ? street.outputAABBParentBuffer : 0,
+                street.nodeCountBuffer,
+                globalDescriptorHeap);
+        }
+
+        // Fit AABBs around each node in the hierarchy.
+        m_constructAABBPass.ConstructAABB(
+            pCommandList,
+            sceneType,
+            pDesc->DestAccelerationStructureData.StartAddress,
+            street.calculateAABBScratchBuffer,
+            street.nodeCountBuffer,
+            street.hierarchyBuffer,
+            performUpdate ? street.outputAABBParentBuffer : 0,
+            globalDescriptorHeap,
+            numElements);
+    }
+
+    void GpuBvh2Builder::LoadBVHElements(
+        _In_ ID3D12GraphicsCommandList *pCommandList,
+        _In_  const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *pDesc,
+        const SceneType sceneType,
+        const UINT numElements,
+        D3D12_GPU_VIRTUAL_ADDRESS elementBuffer,
+        D3D12_GPU_VIRTUAL_ADDRESS metadataBuffer,
+        D3D12_GPU_VIRTUAL_ADDRESS indexBuffer,
+        D3D12_GPU_VIRTUAL_ADDRESS sceneAABBScratchMemory,
+        D3D12_GPU_VIRTUAL_ADDRESS sceneAABB,
+        D3D12_GPU_DESCRIPTOR_HANDLE globalDescriptorHeap)
+    {
+        switch(sceneType) 
+        {
+            case SceneType::BottomLevelBVHs:
+            // Note that the load instances pass does load metadata even though it doesn't take a metadata
+            // buffer address. Users don't specify BVH instance metadata, so the shader takes care of
+            // putting the metadata where it needs to go on its own.
+            m_loadInstancesPass.LoadInstances(
+                pCommandList, 
+                elementBuffer, 
+                pDesc->InstanceDescs, 
+                pDesc->DescsLayout, 
+                numElements, 
+                globalDescriptorHeap,
+                indexBuffer);
+            break;
+            case SceneType::Triangles:
+            // Load all the triangles into the bottom-level acceleration structure. This loading is done 
+            // one VB/IB pair at a time since each VB will have unique characteristics (topology type/IB format)
+            // and will generally have enough verticies to go completely wide
+            m_loadPrimitivesPass.LoadPrimitives(
+                pCommandList, 
+                *pDesc, 
+                numElements, 
+                elementBuffer,
+                metadataBuffer,
+                indexBuffer);
+            break;
+        }
+
+        m_sceneAABBCalculator.CalculateSceneAABB(
+            pCommandList, 
+            sceneType, 
+            elementBuffer, 
+            numElements, 
+            sceneAABBScratchMemory, 
+            sceneAABB);
+    }
+
+    void GpuBvh2Builder::BuildBVHHierarchy(
+        _In_ ID3D12GraphicsCommandList *pCommandList,
+        _In_  const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *pDesc,
+        const SceneType sceneType,
+        const uint numElements,
+        D3D12_GPU_VIRTUAL_ADDRESS scratchElementBuffer,
+        D3D12_GPU_VIRTUAL_ADDRESS outputElementBuffer,
+        D3D12_GPU_VIRTUAL_ADDRESS scratchMetadataBuffer,
+        D3D12_GPU_VIRTUAL_ADDRESS outputMetadataBuffer,
+        D3D12_GPU_VIRTUAL_ADDRESS sceneAABBScratchMemory,
+        D3D12_GPU_VIRTUAL_ADDRESS sceneAABB,
+        D3D12_GPU_VIRTUAL_ADDRESS mortonCodeBuffer,
+        D3D12_GPU_VIRTUAL_ADDRESS indexBuffer,
+        D3D12_GPU_VIRTUAL_ADDRESS outputSortCacheBuffer,
+        D3D12_GPU_VIRTUAL_ADDRESS hierarchyBuffer,
+        D3D12_GPU_VIRTUAL_ADDRESS outputAABBParentBuffer,
+        D3D12_GPU_VIRTUAL_ADDRESS nodeCountBuffer,
+        D3D12_GPU_DESCRIPTOR_HANDLE globalDescriptorHeap) 
+    {
+        m_mortonCodeCalculator.CalculateMortonCodes(
+            pCommandList, 
+            sceneType, 
+            scratchElementBuffer, 
+            numElements, 
+            sceneAABB, 
+            indexBuffer, 
+            mortonCodeBuffer);
+
+        m_sorterPass.Sort(
+            pCommandList, 
+            mortonCodeBuffer, 
+            indexBuffer, 
+            numElements, 
+            false, 
+            true);
 
         m_rearrangePass.Rearrange(
             pCommandList,
             sceneType,
-            scratchTriangleBuffer,
-            totalTriangles,
-            indexBuffer,
-            outputTriangleBuffer,
+            numElements,
+            scratchElementBuffer,
             scratchMetadataBuffer,
-            outputMetadataBuffer);
+            indexBuffer,
+            outputElementBuffer,
+            outputMetadataBuffer,
+            outputSortCacheBuffer);
 
         m_constructHierarchyPass.ConstructHierarchy(
             pCommandList,
             sceneType,
             mortonCodeBuffer,
             hierarchyBuffer,
-            D3D12_GPU_DESCRIPTOR_HANDLE(),
-            totalTriangles);
+            outputAABBParentBuffer, // Store parent indices in hierarchy pass since AABBNodes don't store parent indices.
+            globalDescriptorHeap,
+            numElements);
 
-        m_treeletReorder.Optimize(
-            pCommandList,
-            totalTriangles,
-            hierarchyBuffer,
-            nodeCountBuffer,
-            sceneAABBScratchMemory,
-            outputTriangleBuffer,
-            D3D12_GPU_DESCRIPTOR_HANDLE(),
-            pDesc->Flags);
-
-        m_constructAABBPass.ConstructAABB(
-            pCommandList,
-            sceneType,
-            pDesc->DestAccelerationStructureData.StartAddress,
-            calculateAABBScratchBuffer,
-            nodeCountBuffer,
-            mortonCodeBuffer,
-            hierarchyBuffer,
-            D3D12_GPU_DESCRIPTOR_HANDLE(),
-            totalTriangles);
+        if (sceneType == SceneType::Triangles) 
+        {
+            m_treeletReorder.Optimize(
+                pCommandList,
+                numElements,
+                hierarchyBuffer,
+                outputAABBParentBuffer, // Make sure parent indices get updated when things are reshuffled
+                nodeCountBuffer,
+                sceneAABBScratchMemory,
+                outputElementBuffer,
+                globalDescriptorHeap,
+                pDesc->Flags);
+        }
     }
 
     void GpuBvh2Builder::CopyRaytracingAccelerationStructure(
@@ -310,6 +439,13 @@ namespace FallbackLayer
             pInfo->ResultDataMaxSizeInBytes = sizeof(BVHOffsets) + totalNumberOfTriangles * (sizeof(Primitive) + sizeof(PrimitiveMetaData)) +
                 totalNumNodes * sizeof(AABBNode);
 
+            m_updateAllowed = (pDesc->Flags & D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE) != 0;
+            if (m_updateAllowed) 
+            {
+                pInfo->ResultDataMaxSizeInBytes += totalNumberOfTriangles * sizeof(UINT); // Saved sorted index buffer
+                pInfo->ResultDataMaxSizeInBytes += totalNumNodes * sizeof(UINT); // Parent indices for AABBNodes
+            }
+
             pInfo->ScratchDataSizeInBytes = CalculateScratchMemoryUsage(Level::Bottom, totalNumberOfTriangles).TotalSize;
             pInfo->UpdateScratchDataSizeInBytes = 0;
         }
@@ -322,6 +458,13 @@ namespace FallbackLayer
             const UINT totalNumNodes = numLeaves + numInternalNodes;
 
             pInfo->ResultDataMaxSizeInBytes = sizeof(BVHOffsets) + sizeof(AABBNode) * totalNumNodes + sizeof(BVHMetadata) * numLeaves;
+            m_updateAllowed = (pDesc->Flags & D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE) != 0;
+            if (m_updateAllowed)
+            {
+                pInfo->ResultDataMaxSizeInBytes += numLeaves * sizeof(UINT); // Saved sorted index buffer
+                pInfo->ResultDataMaxSizeInBytes += totalNumNodes * sizeof(UINT); // Parent indices for AABBNodes
+            }
+
             pInfo->ScratchDataSizeInBytes = CalculateScratchMemoryUsage(Level::Top, numLeaves).TotalSize;
             pInfo->UpdateScratchDataSizeInBytes = 0;
         }

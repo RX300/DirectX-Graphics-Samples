@@ -29,8 +29,13 @@ void main(uint3 DTid : SV_DispatchThreadID)
     {
         return;
     }
-    uint globalPrimitiveIndex = localPrimitiveIndex + Constants.PrimitiveOffset;
     AABB aabb = GetAABB(elementBuffer, localPrimitiveIndex, Constants.ElementBufferStride);
+
+    uint globalPrimitiveIndex = localPrimitiveIndex + Constants.PrimitiveOffset;
+    if (Constants.PerformUpdate)
+    {
+        globalPrimitiveIndex = GetSortedIndex(globalPrimitiveIndex);
+    }
 
     PrimitiveBuffer[globalPrimitiveIndex] = CreateProceduralGeometryPrimitive(aabb);
     StorePrimitiveMetadata(globalPrimitiveIndex, localPrimitiveIndex);
