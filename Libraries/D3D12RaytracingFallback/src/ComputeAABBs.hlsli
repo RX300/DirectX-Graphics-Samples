@@ -98,7 +98,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
         else
         {
             uint leftNodeIndex = GetLeftChildIndex(nodeIndex);
-            uint rightNodeIndex = hierarchyBuffer[nodeIndex].RightChildIndex;
+            uint rightNodeIndex = GetRightChildIndex(nodeIndex);
             if (swapChildIndices)
             {
                 uint temp = leftNodeIndex;
