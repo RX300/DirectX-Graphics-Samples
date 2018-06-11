@@ -47,15 +47,16 @@ namespace FallbackLayer
         D3D12_GPU_VIRTUAL_ADDRESS hierarchyBuffer,
         D3D12_GPU_VIRTUAL_ADDRESS outputAABBParentBuffer,
         D3D12_GPU_DESCRIPTOR_HANDLE globalDescriptorHeap,
+        const bool prepareUpdate,
+        const bool performUpdate,
         UINT numElements)
     {
         bool isEmptyAccelerationStructure = numElements == 0;
         Level level = (sceneType == SceneType::Triangles) ? Level::Bottom : Level::Top;
 
-        const bool performUpdate = outputAABBParentBuffer != 0;
-
         InputConstants constants = {};
         constants.NumberOfElements = numElements;
+        constants.PrepareUpdate = (UINT) prepareUpdate;
         constants.PerformUpdate = (UINT) performUpdate;
 
         pCommandList->SetComputeRootSignature(m_pRootSignature);
@@ -68,7 +69,7 @@ namespace FallbackLayer
             pCommandList->SetComputeRootUnorderedAccessView(HierarchyUAVParam, hierarchyBuffer);
         }
 
-        if (performUpdate)
+        if (prepareUpdate || performUpdate)
         {
             pCommandList->SetComputeRootUnorderedAccessView(AABBParentBufferParam, outputAABBParentBuffer);
         }

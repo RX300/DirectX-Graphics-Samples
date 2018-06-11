@@ -20,7 +20,6 @@ namespace FallbackLayer
             ID3D12GraphicsCommandList *pCommandList,
             UINT numElements,
             D3D12_GPU_VIRTUAL_ADDRESS hierarchyBuffer,
-            D3D12_GPU_VIRTUAL_ADDRESS outputAABBParentBuffer,
             D3D12_GPU_VIRTUAL_ADDRESS triangleCountBuffer,
             D3D12_GPU_VIRTUAL_ADDRESS aabbBuffer,
             D3D12_GPU_VIRTUAL_ADDRESS inputElementBuffer,
@@ -36,7 +35,6 @@ namespace FallbackLayer
         enum RootParameterSlot
         {
             HierarchyBufferSlot = 0,
-            AABBParentBufferSlot,
             TriangleCountBufferSlot,
             AABBBufferSlot,
             InputElementSlot,

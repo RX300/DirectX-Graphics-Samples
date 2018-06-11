@@ -60,9 +60,13 @@ cbuffer LoadPrimitivesConstants : CONSTANT_REGISTER(LoadInstancesConstantsRegist
     LoadPrimitivesInputConstants Constants;
 }
 
-uint GetSortedIndex(uint globalPrimitiveIndex) 
+uint GetOutputIndex(uint inputIndex) 
 {
-    return CachedSortBuffer[globalPrimitiveIndex];
+    if (Constants.PerformUpdate)
+    {
+        return CachedSortBuffer[inputIndex];
+    }
+    return inputIndex;
 }
 
 void StorePrimitiveMetadata(uint globalPrimitiveIndex, uint localPrimitiveIndex)

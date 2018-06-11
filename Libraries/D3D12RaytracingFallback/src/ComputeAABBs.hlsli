@@ -28,6 +28,40 @@ uint4 GetNodeData(uint boxIndex, out uint2 flags)
     return data;
 }
 
+uint2 GetNodeFlags(uint boxIndex) 
+{
+    uint2 flags;
+    GetNodeData(boxIndex, flags);
+    return flags;
+}
+
+uint GetLeftChildIndex(uint boxIndex) {
+    if (Constants.PerformUpdate)
+    {
+        return GetLeftNodeIndex(GetNodeFlags(boxIndex));
+    }
+
+    return hierarchyBuffer[boxIndex].LeftChildIndex;
+}
+
+uint GetRightChildIndex(uint boxIndex) {
+    if (Constants.PerformUpdate)
+    {
+        return GetRightNodeIndex(GetNodeFlags(boxIndex));
+    }
+
+    return hierarchyBuffer[boxIndex].RightChildIndex;
+}
+
+uint GetParentIndex(uint boxIndex) {
+    if (Constants.PerformUpdate)
+    {
+        return aabbParentBuffer[boxIndex];
+    }
+
+    return hierarchyBuffer[boxIndex].ParentIndex;
+}
+
 [numthreads(THREAD_GROUP_1D_WIDTH, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
@@ -63,7 +97,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
         }
         else
         {
-            uint leftNodeIndex = hierarchyBuffer[nodeIndex].LeftChildIndex;
+            uint leftNodeIndex = GetLeftChildIndex(nodeIndex);
             uint rightNodeIndex = hierarchyBuffer[nodeIndex].RightChildIndex;
             if (swapChildIndices)
             {
@@ -104,21 +138,26 @@ void main(uint3 DTid : SV_DispatchThreadID)
             break;
         }
 
-        uint parentNodeIndex = Constants.PerformUpdate ? aabbParentBuffer[nodeIndex] : hierarchyBuffer[nodeIndex].ParentIndex;
+        uint parentNodeIndex = GetParentIndex(nodeIndex);
         uint trianglesFromOtherChild;
         // If this counter was already incremented, that means both children for the parent 
         // node have computed their AABB, and the parent is ready to be processed
         childNodesProcessedCounter.InterlockedAdd(parentNodeIndex * SizeOfUINT32, numTriangles, trianglesFromOtherChild);
         if (trianglesFromOtherChild != 0)
         {
-
             // Prioritize having the smaller nodes on the left
             // TODO: Investigate better heuristics for node ordering
-            bool IsLeft = hierarchyBuffer[parentNodeIndex].LeftChildIndex == nodeIndex;
+            bool IsLeft = GetLeftChildIndex(parentNodeIndex) == nodeIndex;
             bool IsOtherSideSmaller = numTriangles > trianglesFromOtherChild;
             swapChildIndices = IsLeft ? IsOtherSideSmaller : !IsOtherSideSmaller;
             nodeIndex = parentNodeIndex;
             numTriangles += trianglesFromOtherChild;
+
+            if (Constants.PrepareUpdate)
+            {
+                aabbParentBuffer[GetLeftChildIndex(nodeIndex)] = nodeIndex;
+                aabbParentBuffer[GetRightChildIndex(nodeIndex)] = nodeIndex;
+            }
         }
         else
         {

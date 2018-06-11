@@ -259,13 +259,19 @@ namespace FallbackLayerUnitTests
                 totalSizeNeeded += ALIGN(D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT, prebuildInfo.ScratchDataSizeInBytes);
             }
 
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS buildFlags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+            if (performUpdate)
+            {
+                buildFlags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
+            }
+
             // Top level
             D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO topLevelPrebuildInfo;
             {
                 builder.GetRaytracingAccelerationStructurePrebuildInfo(
                     &device, 
                     D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL, 
-                    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD | (performUpdate ? D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE : D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_NONE),
+                    buildFlags,
                     numGeoms, 
                     nullptr, 
                     &topLevelPrebuildInfo
@@ -359,7 +365,7 @@ namespace FallbackLayerUnitTests
             topLevelDesc.DestAccelerationStructureData.SizeInBytes = pTopLevelResource->GetDesc().Width;
             topLevelDesc.ScratchAccelerationStructureData.StartAddress = pScratchResource->GetGPUVirtualAddress();
             topLevelDesc.ScratchAccelerationStructureData.SizeInBytes = pScratchResource->GetDesc().Width;
-            topLevelDesc.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+            topLevelDesc.Flags = buildFlags;
             topLevelDesc.NumDescs = numGeoms;
             topLevelDesc.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
             topLevelDesc.InstanceDescs = layoutToTest == D3D12_ELEMENTS_LAYOUT_ARRAY ?
@@ -3119,7 +3125,6 @@ namespace FallbackLayerUnitTests
                 pCommandList,
                 numLeafNodes,
                 pHierarchyBuffer->GetGPUVirtualAddress(),
-                0,
                 pNodeCountBuffer->GetGPUVirtualAddress(),
                 pAABBBuffer->GetGPUVirtualAddress(),
                 pTriangleBuffer->GetGPUVirtualAddress(),

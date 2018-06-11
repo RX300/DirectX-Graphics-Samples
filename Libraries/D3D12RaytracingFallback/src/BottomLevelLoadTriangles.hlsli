@@ -119,11 +119,8 @@ void main( uint3 DTid : SV_DispatchThreadID )
     }
 
     uint globalTriangleIndex = localTriangleIndex + Constants.PrimitiveOffset;
-    if (Constants.PerformUpdate)
-    {
-        globalTriangleIndex = GetSortedIndex(globalTriangleIndex);
-    }
+    uint outputIndex = GetOutputIndex(globalTriangleIndex);
     
-    PrimitiveBuffer[globalTriangleIndex] = CreateTrianglePrimitive(tri);
-    StorePrimitiveMetadata(globalTriangleIndex, localTriangleIndex);
+    PrimitiveBuffer[outputIndex] = CreateTrianglePrimitive(tri);
+    StorePrimitiveMetadata(outputIndex, localTriangleIndex);
 }

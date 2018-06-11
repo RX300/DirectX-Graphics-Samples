@@ -24,6 +24,8 @@ namespace FallbackLayer
             D3D12_GPU_VIRTUAL_ADDRESS hierarchyBuffer,
             D3D12_GPU_VIRTUAL_ADDRESS outputAABBParentBuffer,
             D3D12_GPU_DESCRIPTOR_HANDLE globalDescriptorHeap,
+            const bool prepareUpdate,
+            const bool performUpdate,
             UINT numElements);
     private:
         enum RootParameterSlot

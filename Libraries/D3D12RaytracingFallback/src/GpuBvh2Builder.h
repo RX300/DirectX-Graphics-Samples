@@ -66,8 +66,6 @@ namespace FallbackLayer
 
         ScratchMemoryPartitions CalculateScratchMemoryUsage(Level level, UINT numTriangles);
 
-        bool m_updateAllowed;
-
         SceneAABBCalculator m_sceneAABBCalculator;
         MortonCodesCalculator m_mortonCodeCalculator;
         BitonicSort m_sorterPass;
@@ -81,8 +79,7 @@ namespace FallbackLayer
         PostBuildInfoQuery m_postBuildInfoQuery;
         GpuBvh2Copy m_copyPass;
 
-        // A street is made up of addresses ;)
-        struct BVHGPUStreet {
+        struct GpuBVHBuffers {
             D3D12_GPU_VIRTUAL_ADDRESS scratchElementBuffer;
             D3D12_GPU_VIRTUAL_ADDRESS outputElementBuffer;
             D3D12_GPU_VIRTUAL_ADDRESS scratchMetadataBuffer;
@@ -98,11 +95,11 @@ namespace FallbackLayer
             D3D12_GPU_VIRTUAL_ADDRESS outputAABBParentBuffer;
         };
 
-        void GpuBvh2Builder::LoadBVHGPUStreet(
+        void GpuBvh2Builder::LoadGpuBVHBuffers(
             _In_  const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *pDesc,
             Level bvhLevel,
             UINT numElements,
-            BVHGPUStreet &street
+            GpuBVHBuffers &buffers
         );
         
         void BuildTopLevelBVH(
@@ -153,7 +150,6 @@ namespace FallbackLayer
             D3D12_GPU_VIRTUAL_ADDRESS indexBuffer,
             D3D12_GPU_VIRTUAL_ADDRESS outputSortCacheBuffer,
             D3D12_GPU_VIRTUAL_ADDRESS hierarchyBuffer,
-            D3D12_GPU_VIRTUAL_ADDRESS outputAABBParentBuffer,
             D3D12_GPU_VIRTUAL_ADDRESS nodeCountBuffer,
             D3D12_GPU_DESCRIPTOR_HANDLE globalDescriptorHeap
         );

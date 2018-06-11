@@ -17,6 +17,7 @@
 struct InputConstants
 {
     uint NumberOfElements;
+    uint PrepareUpdate;
     uint PerformUpdate;
 };
 

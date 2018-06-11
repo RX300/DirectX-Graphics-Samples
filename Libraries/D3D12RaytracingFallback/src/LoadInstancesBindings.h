@@ -49,4 +49,13 @@ cbuffer TopLevelConstants : CONSTANT_REGISTER(LoadInstancesConstantsRegister)
 {
     LoadInstancesConstants Constants;
 }
+
+uint GetOutputIndex(uint inputIndex) 
+{
+    if (Constants.PerformUpdate)
+    {
+        return CachedSortBuffer[inputIndex];
+    }
+    return inputIndex;
+}
 #endif
